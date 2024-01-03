@@ -299,7 +299,7 @@ async function setActivity(rpc?: Client) {
             console.log('bodyPayload: ', bodyPayload)
 
             const md5 = new Md5()
-            const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + 'c5efbca10988b77db4836af676f0bbd7'
+            const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + SK
             console.log('key: ', key)
             const md5Signed = md5.update(key).toString();
 
@@ -375,7 +375,7 @@ async function setActivity(rpc?: Client) {
       };
 
       const md5 = new Md5()
-      const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + 'c5efbca10988b77db4836af676f0bbd7'
+      const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + SK
       const md5Signed = md5.update(key).toString();
 
       bodyPayload['api_sig'] = md5Signed
