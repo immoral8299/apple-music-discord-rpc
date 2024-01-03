@@ -5,7 +5,10 @@ import { Client } from "https://deno.land/x/discord_rpc@0.3.2/mod.ts";
 import type {} from "https://raw.githubusercontent.com/NextFire/jxa/v0.0.4/run/global.d.ts";
 import { run } from "https://raw.githubusercontent.com/NextFire/jxa/v0.0.4/run/mod.ts";
 import type { iTunes } from "https://raw.githubusercontent.com/NextFire/jxa/v0.0.4/run/types/core.d.ts";
+import { Md5 } from "https://deno.land/std@0.119.0/hash/md5.ts";
+import { load } from "https://deno.land/std@0.210.0/dotenv/mod.ts";
 
+const env = await load();
 // Cache
 
 class Cache {
@@ -57,6 +60,11 @@ const MACOS_VER = await getMacOSVersion();
 const IS_APPLE_MUSIC = MACOS_VER >= 10.15;
 const APP_NAME: iTunesAppName = IS_APPLE_MUSIC ? "Music" : "iTunes";
 const CLIENT_ID = IS_APPLE_MUSIC ? "773825528921849856" : "979297966739300416";
+
+const API_KEY = env['API_KEY']
+const USERNAME = env['USERNAME']
+const SK = env['SK']
+
 start();
 
 async function start() {
@@ -66,16 +74,22 @@ async function start() {
 
 async function main() {
   try {
-    const rpc = new Client({ id: CLIENT_ID });
-    await rpc.connect();
-    console.log(rpc);
+    let rpc = new Client({ id: CLIENT_ID });
+
+    // console.log(rpc);
     const timer = setInterval(async () => {
+      try {
+        await rpc.connect();
+      } catch (err) {
+        rpc = null
+      }
+
       try {
         await setActivity(rpc);
       } catch (err) {
         console.error(err);
         clearInterval(timer);
-        rpc.close();
+        if (rpc) rpc.close();
         main();
       }
     }, 15e3);
@@ -230,11 +244,11 @@ async function _getMBArtwork(
 
 // Activity setter
 
-async function setActivity(rpc: Client) {
+async function setActivity(rpc?: Client) {
   const open = await isOpen();
   console.log("isOpen:", open);
 
-  if (!open) {
+  if (!open && rpc) {
     await rpc.clearActivity();
     return;
   }
@@ -245,11 +259,65 @@ async function setActivity(rpc: Client) {
   switch (state) {
     case "playing": {
       const props = await getProps();
-      console.log("props:", props);
+      props.album = props.album.replace(' - Single', '')
+      props.album = props.album.replace(' - EP', '')
+
+      // console.log("props:", props);
 
       let end;
       if (props.duration) {
         const delta = (props.duration - props.playerPosition) * 1000;
+
+        if ((props.duration - props.playerPosition) / props.duration < 0.25) {
+          const recentTracks = await (await fetch(
+            `https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user=${USERNAME}&api_key=${API_KEY}&limit=2&format=json`,
+            { headers: { 'User-Agent': 'AppleMusic RPC' } }
+          )).json()
+
+          console.log('recentTracks: ', recentTracks)
+          const lastTrack = recentTracks.recenttracks.track.find((t) => t['@attr'] === undefined)
+
+          console.log('data:', `${lastTrack.name} ${lastTrack.artist['#text']} ${lastTrack.album['#text']}`)
+          console.log('last:', `${props.name} ${props.artist} ${props.album}`)
+          console.log('same:', `${lastTrack.name} ${lastTrack.artist['#text']} ${lastTrack.album['#text']}` === `${props.name} ${props.artist} ${props.album}`)
+
+          if (
+            `${lastTrack.name} ${lastTrack.artist['#text']} ${lastTrack.album['#text']}` !== `${props.name} ${props.artist} ${props.album}` ||
+            (lastTrack.date.uts - Math.floor(new Date().getTime() / 1000 - props.playerPosition)) > props.duration
+          ) {
+            const bodyPayload = {
+              api_key: API_KEY,
+              method: 'track.scrobble',
+              sk: SK,
+              'artist[0]': props.artist,
+              'album[0]': props.album,
+              'track[0]': props.name,
+              'duration[0]': props.duration,
+              'timestamp[0]': new Date().getTime() / 1000 - props.playerPosition,
+            };
+            console.log('bodyPayload: ', bodyPayload)
+
+            const md5 = new Md5()
+            const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + 'c5efbca10988b77db4836af676f0bbd7'
+            console.log('key: ', key)
+            const md5Signed = md5.update(key).toString();
+
+            bodyPayload['api_sig'] = md5Signed
+
+            await fetch(
+              'http://ws.audioscrobbler.com/2.0',
+              {
+                method: 'POST',
+                headers: {
+                  'User-Agent': 'AppleMusic RPC'
+                },
+                body: new URLSearchParams(bodyPayload)
+              }
+            )
+          }
+        }
+
+
         end = Math.ceil(Date.now() + delta);
       }
 
@@ -269,7 +337,7 @@ async function setActivity(rpc: Client) {
         const buttons = [];
 
         const infos = await getTrackExtras(props);
-        console.log("infos:", infos);
+        // console.log("infos:", infos);
 
         activity.assets = {
           large_image: infos.artworkUrl ?? "appicon",
@@ -295,13 +363,39 @@ async function setActivity(rpc: Client) {
         if (buttons.length > 0) activity.buttons = buttons;
       }
 
-      await rpc.setActivity(activity);
+      if (rpc) await rpc.setActivity(activity);
+      const bodyPayload = {
+        api_key: API_KEY,
+        method: 'track.updateNowPlaying',
+        sk: SK,
+        artist:  props.artist,
+        album:  props.album,
+        track:  props.name,
+      };
+
+      const md5 = new Md5()
+      const key = Object.entries(bodyPayload).sort().map(row => row.join('')).join('') + 'c5efbca10988b77db4836af676f0bbd7'
+      const md5Signed = md5.update(key).toString();
+
+      bodyPayload['api_sig'] = md5Signed
+
+      await fetch(
+        'http://ws.audioscrobbler.com/2.0',
+        {
+          method: 'POST',
+          headers: {
+            'User-Agent': 'AppleMusic RPC'
+          },
+          body: new URLSearchParams(bodyPayload)
+        }
+      )
+
       break;
     }
 
     case "paused":
     case "stopped": {
-      await rpc.clearActivity();
+      if (rpc) await rpc.clearActivity();
       break;
     }
   }

@@ -1,3 +1,5 @@
 .DS_Store
 /music-rpc.log
 /cache.json
+.env.*
+.env
