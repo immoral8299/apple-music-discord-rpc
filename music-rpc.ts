@@ -74,11 +74,12 @@ async function start() {
 
 async function main() {
   try {
-    let rpc = new Client({ id: CLIENT_ID });
+    let rpc
 
     // console.log(rpc);
     const timer = setInterval(async () => {
       try {
+        rpc = new Client({ id: CLIENT_ID });
         await rpc.connect();
       } catch (err) {
         rpc = null
